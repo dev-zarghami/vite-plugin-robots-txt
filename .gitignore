@@ -1,0 +1,28 @@
+# Common
+dist
+node_modules
+.eslintcache
+vite.config.*.timestamp*
+
+# MacOS
+.DS_Store
+
+# Local env files
+*.local
+
+# Logs
+*.log
+
+# Use the pnpm
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lockb
+.pnpm-store
+.celp-ai
+
+.vscode
+.idea
+
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
