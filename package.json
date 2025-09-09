@@ -1,5 +1,5 @@
 {
-  "name": "vite-plugin-robots",
+  "name": "vite-plugin-robots-txt",
   "version": "0.1.0",
   "description": "Generate robots.txt for Vite with env-aware policies and dev no-store preview.",
   "keywords": [
@@ -13,15 +13,15 @@
   "author": "Kebrin",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/vite-plugin-robots.git"
+    "url": "git+https://github.com/dev-zarghami/vite-plugin-robots-txt.git"
   },
   "bugs": {
-    "url": "https://github.com/your-org/vite-plugin-robots/issues"
+    "url": "https://github.com/dev-zarghami/vite-plugin-robots-txt/issues"
   },
   "publishConfig": {
-    "@dev.zarghami:registry": "https://npm.pkg.github.com"
+    "access": "public"
   },
-  "homepage": "https://github.com/your-org/vite-plugin-robots#readme",
+  "homepage": "https://github.com/dev-zarghami/vite-plugin-robots-txt#readme",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -49,6 +49,7 @@
   "scripts": {
     "build": "tsup",
     "clean": "rm -rf dist",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run clean && npm run build"
   },
   "engines": {

@@ -123,15 +123,13 @@ export function generateRobotsTxt(options: RobotsOptions = {}): Plugin {
     let outPath = path.join(outDir, filename);
 
     return {
-        name: "vite-plugin-robots",
+        name: "vite-plugin-robots-txt",
         apply: () => true,
 
         configResolved(config) {
             root = config.root ?? process.cwd();
             mode = config.mode;
-            // Vite passes "serve" or "build" via the hook contexts; infer using config.command when available
             command = (config as any).command ?? command;
-
             outDir = detectOutputDir(root, options.outputDir);
             outPath = path.join(outDir, filename);
         },
