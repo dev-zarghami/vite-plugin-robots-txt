@@ -3,7 +3,7 @@ name: Release from package.json
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: {}
+  workflow_dispatch: { }
 
 concurrency:
   group: release-from-pkg-${{ github.ref }}
@@ -78,10 +78,19 @@ jobs:
             npm publish
           fi
 
-      # Optional: publish to GitHub Packages if scoped (@owner/name) and token provided
+      # Optional: publish to GitHub Packages if token is present AND package is scoped (@owner/name).
+      # We avoid using secrets.* in an `if:` by checking inside the shell script.
       - name: Publish to GitHub Packages (optional)
-        if: secrets.GH_PACKAGES_TOKEN != '' && startsWith(steps.pkg.outputs.name, '@')
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          PKG_NAME: ${{ steps.pkg.outputs.name }}
         run: |
+          if [[ -z "${NODE_AUTH_TOKEN}" ]]; then
+            echo "GH_PACKAGES_TOKEN not set; skipping GitHub Packages publish."
+            exit 0
+          fi
+          if [[ "${PKG_NAME}" != @*/* ]]; then
+            echo "Package name is not scoped (@owner/name); skipping GitHub Packages publish."
+            exit 0
+          fi
           npm publish --registry=https://npm.pkg.github.com
