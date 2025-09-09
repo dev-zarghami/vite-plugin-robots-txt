@@ -1,0 +1,54 @@
+{
+  "name": "vite-plugin-robots",
+  "version": "0.1.0",
+  "description": "Generate robots.txt for Vite with env-aware policies and dev no-store preview.",
+  "keywords": [
+    "vite",
+    "plugin",
+    "robots.txt",
+    "sveltekit",
+    "seo"
+  ],
+  "license": "MIT",
+  "author": "Kebrin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/vite-plugin-robots.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-org/vite-plugin-robots/issues"
+  },
+  "homepage": "https://github.com/your-org/vite-plugin-robots#readme",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "peerDependencies": {
+    "vite": ">=4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.1",
+    "tsup": "^8.2.4",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.0"
+  },
+  "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
