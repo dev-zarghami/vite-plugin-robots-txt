@@ -1,96 +1,32 @@
-name: Release from package.json
+name: Publish to npm
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch: { }
-
-concurrency:
-  group: release-from-pkg-${{ github.ref }}
-  cancel-in-progress: false
-
-permissions:
-  contents: write   # required to push tags
-  packages: write
-  id-token: write   # optional, for provenance
+    branches:
+      - main
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # we need tags/history
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-      - name: Use Node.js 20
-        uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
         with:
-          node-version: 20
-          registry-url: https://registry.npmjs.org/
+          node-version: 18.13
           cache: 'npm'
-
-      - name: Read version from package.json
-        id: pkg
-        run: |
-          PKG_NAME=$(node -p "require('./package.json').name")
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          echo "name=$PKG_NAME" >> $GITHUB_OUTPUT
-          echo "version=$PKG_VERSION" >> $GITHUB_OUTPUT
-          echo "Package: $PKG_NAME@$PKG_VERSION"
-
-      - name: Ensure git tag exists for package.json version
-        id: tag
-        env:
-          V: ${{ steps.pkg.outputs.version }}
-        run: |
-          git fetch --tags --force
-          if git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Tag v$V already exists. Skipping tag creation."
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-            git config user.name "${GITHUB_ACTOR}"
-            git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
-            git tag -a "v$V" -m "release v$V"
-            git push origin "v$V"
-            echo "Created and pushed tag v$V"
-          fi
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
-      - name: Build
+      - name: Build package
         run: npm run build
 
-      - name: Pack (dry run)
-        run: npm pack --dry-run
-
-      - name: Publish to npmjs
+      - name: Publish to npm
+        run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          NAME="${{ steps.pkg.outputs.name }}"
-          if [[ "$NAME" == @*/* ]]; then
-            npm publish --access public
-          else
-            npm publish
-          fi
-
-      # Optional: publish to GitHub Packages if token is present AND package is scoped (@owner/name).
-      # We avoid using secrets.* in an `if:` by checking inside the shell script.
-      - name: Publish to GitHub Packages (optional)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
-          PKG_NAME: ${{ steps.pkg.outputs.name }}
-        run: |
-          if [[ -z "${NODE_AUTH_TOKEN}" ]]; then
-            echo "GH_PACKAGES_TOKEN not set; skipping GitHub Packages publish."
-            exit 0
-          fi
-          if [[ "${PKG_NAME}" != @*/* ]]; then
-            echo "Package name is not scoped (@owner/name); skipping GitHub Packages publish."
-            exit 0
-          fi
-          npm publish --registry=https://npm.pkg.github.com
