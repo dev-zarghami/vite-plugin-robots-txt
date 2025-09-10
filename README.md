@@ -16,7 +16,6 @@ Generate a `robots.txt` for any Vite-powered app (React, SvelteKit, Vue, Solid, 
 > ```
 
 ---
-
 ## Requirements
 
 - **Node**: `>= 18`
