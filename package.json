@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-robots-txt",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Generate robots.txt for Vite with env-aware policies and dev no-store preview.",
   "keywords": [
     "vite",
