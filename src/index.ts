@@ -1,5 +1,16 @@
-// vite/plugins/generate-robots.ts
-import type {Plugin, ResolvedConfig} from "vite";
+import fs from "node:fs";
+import path from "node:path";
+import type {Plugin, ResolvedConfig, Logger} from "vite";
+
+/**
+ * ---------------------------------------------------------------------------
+ *  Vite Plugin: vite-plugin-robots-txt
+ *  - Emits robots.txt in build
+ *  - Serves robots.txt in dev with no-store
+ *  - Optional mirror to disk via outputDir (both dev & prod)
+ *  - Unified style, Vite logger, no external helpers
+ * ---------------------------------------------------------------------------
+ */
 
 /** One user-agent block */
 export type RobotsPolicy = {
@@ -10,26 +21,24 @@ export type RobotsPolicy = {
 
 export type RobotsOptions = {
     filename?: string; // default "robots.txt"
+
+    // Static policies (wins over builder if provided and non-empty)
     policies?: RobotsPolicy[];
-    policyBuilder?: (ctx: {
-        mode: string;
-        command: "serve" | "build";
-        root: string;
-    }) => RobotsPolicy[];
 
-    sitemaps?:
-        | string[]
-        | ((ctx: { mode: string; command: "serve" | "build"; root: string }) =>
-        | string[]
-        | undefined);
+    // Build from current ctx
+    policyBuilder?: (ctx: { mode: string; command: "serve" | "build"; root: string }) => RobotsPolicy[];
 
-    footerComment?:
-        | string
-        | ((ctx: { mode: string; command: "serve" | "build"; root: string }) =>
-        | string
-        | undefined);
+    // Sitemaps
+    sitemaps?: string[] | ((ctx: { mode: string; command: "serve" | "build"; root: string }) => string[] | undefined);
 
+    // Footer as comment
+    footerComment?: string | ((ctx: { mode: string; command: "serve" | "build"; root: string }) => string | undefined);
+
+    // Control dev caching
     noStoreInDev?: boolean; // default true
+
+    // Optional disk mirror (dev & prod)
+    outputDir?: string;
 };
 
 // ----------------- utils -----------------
@@ -65,7 +74,7 @@ function defaultPolicies(): RobotsPolicy[] {
 
 function buildContent(
     ctx: { mode: string; command: "serve" | "build"; root: string },
-    opts: RobotsOptions,
+    opts: RobotsOptions
 ) {
     const policies =
         (opts.policies && opts.policies.length ? opts.policies : undefined) ??
@@ -80,20 +89,29 @@ function buildContent(
             : Array.isArray(opts.sitemaps)
                 ? opts.sitemaps
                 : undefined;
-    const smBlock = sitemaps?.length
-        ? sitemaps.map((u) => `Sitemap: ${u}`).join("\n") + "\n"
-        : "";
+    const smBlock = sitemaps?.length ? sitemaps.map((u) => `Sitemap: ${u}`).join("\n") + "\n" : "";
 
-    const foot =
-        typeof opts.footerComment === "function"
-            ? opts.footerComment(ctx)
-            : opts.footerComment ?? undefined;
+    const foot = typeof opts.footerComment === "function" ? opts.footerComment(ctx) : opts.footerComment ?? undefined;
     const footerBlock = foot ? `\n# ${foot.trim()}\n` : "";
 
-    return (head + (smBlock ? `\n${smBlock}` : "") + footerBlock).replace(
-        /\n{3,}$/g,
-        "\n\n",
-    );
+    return (head + (smBlock ? `\n${smBlock}` : "") + footerBlock).replace(/\n{3,}$/g, "\n\n");
+}
+
+async function writeFileIfChanged(filePath: string, content: string, logger: Logger) {
+    try {
+        const existed = fs.existsSync(filePath);
+        const prev = existed ? await fs.promises.readFile(filePath, "utf8") : null;
+        if (prev === content) {
+            logger.info?.(`[robots] no changes: ${filePath}`);
+            return false;
+        }
+    } catch {
+        // ignore
+    }
+    await fs.promises.mkdir(path.dirname(filePath), {recursive: true});
+    await fs.promises.writeFile(filePath, content, "utf8");
+    logger.info(`[robots] wrote ${filePath}`);
+    return true;
 }
 
 // ----------------- Vite plugin -----------------
@@ -102,17 +120,15 @@ export function generateRobotsTxt(options: RobotsOptions = {}): Plugin {
     const filename = options.filename ?? DEFAULT_FILENAME;
     const noStoreInDev = options.noStoreInDev ?? true;
 
-    let resolvedConfig: ResolvedConfig;
+    let resolvedConfig!: ResolvedConfig;
+    let logger!: Logger;
     let mode = "production";
     let command: "serve" | "build" = "build";
     let root = process.cwd();
-    let lastTxt = "";
 
     const buildTxt = () => {
         const ctx = {mode, command, root};
-        const txt = buildContent(ctx, options);
-        lastTxt = txt;
-        return txt;
+        return buildContent(ctx, options);
     };
 
     return {
@@ -121,22 +137,24 @@ export function generateRobotsTxt(options: RobotsOptions = {}): Plugin {
 
         configResolved(config) {
             resolvedConfig = config;
+            logger = config.logger;
             root = config.root ?? process.cwd();
             mode = config.mode;
             command = config.command as "serve" | "build";
         },
 
-        buildStart() {
-            buildTxt(); // generate initial version for dev & virtual usage
+        async buildStart() {
+            const txt = buildTxt();
+            if (options.outputDir) {
+                const outPath = path.resolve(root, options.outputDir, filename);
+                await writeFileIfChanged(outPath, txt, logger);
+            }
         },
 
         generateBundle() {
             const txt = buildTxt();
-            this.emitFile({
-                type: "asset",
-                fileName: filename, // robots.txt in build output root
-                source: txt,
-            });
+            this.emitFile({type: "asset", fileName: filename, source: txt});
+            logger.info(`[robots] emitted ${filename}`);
         },
 
         configureServer(server) {
@@ -148,15 +166,14 @@ export function generateRobotsTxt(options: RobotsOptions = {}): Plugin {
 
                 res.setHeader("Content-Type", "text/plain; charset=utf-8");
                 if (noStoreInDev) {
-                    res.setHeader(
-                        "Cache-Control",
-                        "no-store, no-cache, must-revalidate, max-age=0",
-                    );
+                    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
                     res.setHeader("Pragma", "no-cache");
                     res.setHeader("Expires", "0");
                 }
                 res.end(txt);
             });
+
+            logger.info(`[robots] dev route mounted → ${route} (no-store)`);
         },
     };
 }
