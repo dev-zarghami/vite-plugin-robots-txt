@@ -1,181 +1,140 @@
-import fs from "node:fs";
-import path from "node:path";
-import type {Plugin, ResolvedConfig, Logger} from "vite";
+import path from 'node:path';
+import type { Logger, Plugin } from 'vite';
+import { writeFileIfChanged } from './internal/fs';
+import { publicRoute, setNoStore } from './internal/server';
+
+const PLUGIN_NAME = 'vite-plugin-robots-txt';
+const TAG = '[robots]';
+const DEFAULT_FILENAME = 'robots.txt';
+
+/** Context passed to every dynamic (function-form) option. */
+export interface RobotsContext {
+  /** Vite mode — `"development"`, `"production"`, or a custom mode. */
+  mode: string;
+  /** Vite command for this run. */
+  command: 'serve' | 'build';
+  /** Absolute project root. */
+  root: string;
+}
+
+/** A value that may be provided directly or computed from the build context. */
+export type Resolvable<T> = T | ((ctx: RobotsContext) => T);
+
+/** A single `User-agent` block. */
+export interface RobotsPolicy {
+  /** User agent this block targets. Defaults to `"*"`. */
+  userAgent?: string;
+  /** `Allow:` paths. */
+  allow?: string[];
+  /** `Disallow:` paths. */
+  disallow?: string[];
+  /** Optional `Crawl-delay:` in seconds. */
+  crawlDelay?: number;
+}
+
+export interface RobotsOptions {
+  /** Output filename. Defaults to `"robots.txt"`. */
+  filename?: string;
+  /** Explicit user-agent blocks. When non-empty, takes precedence over `policyBuilder`. */
+  policies?: RobotsPolicy[];
+  /** Build policies dynamically from the build context. */
+  policyBuilder?: (ctx: RobotsContext) => RobotsPolicy[];
+  /** `Sitemap:` URLs, static or computed. */
+  sitemaps?: Resolvable<string[] | undefined>;
+  /** Trailing comment line (rendered as `# ...`), static or computed. */
+  footerComment?: Resolvable<string | undefined>;
+  /** Serve dev `robots.txt` with no-store headers. Defaults to `true`. */
+  noStoreInDev?: boolean;
+  /**
+   * Also mirror the file to this directory on disk (relative to project root),
+   * in both dev and build. Independent of the emitted build asset.
+   */
+  outputDir?: string;
+}
+
+const DEFAULT_POLICIES: RobotsPolicy[] = [{ userAgent: '*', allow: ['/'] }];
+
+const uniq = (values?: string[]): string[] => Array.from(new Set(values ?? []));
+
+const resolve = <T>(value: Resolvable<T> | undefined, ctx: RobotsContext): T | undefined =>
+  typeof value === 'function' ? (value as (c: RobotsContext) => T)(ctx) : value;
+
+function serializeBlock(policy: RobotsPolicy): string {
+  const userAgent = (policy.userAgent ?? '*').trim() || '*';
+  const out = [`User-agent: ${userAgent}`];
+  for (const allow of uniq(policy.allow)) out.push(`Allow: ${allow}`);
+  for (const disallow of uniq(policy.disallow)) out.push(`Disallow: ${disallow}`);
+  if (policy.crawlDelay != null) out.push(`Crawl-delay: ${policy.crawlDelay}`);
+  return out.join('\n');
+}
+
+function render(ctx: RobotsContext, opts: RobotsOptions): string {
+  const policies =
+    (opts.policies?.length ? opts.policies : undefined) ??
+    opts.policyBuilder?.(ctx) ??
+    DEFAULT_POLICIES;
+
+  const sections = [policies.map(serializeBlock).join('\n\n') + '\n'];
+
+  const sitemaps = resolve(opts.sitemaps, ctx);
+  if (sitemaps?.length) {
+    sections.push(sitemaps.map((url) => `Sitemap: ${url}`).join('\n') + '\n');
+  }
+
+  const footer = resolve(opts.footerComment, ctx)?.trim();
+  if (footer) sections.push(`# ${footer}\n`);
+
+  return sections.join('\n');
+}
 
 /**
- * ---------------------------------------------------------------------------
- *  Vite Plugin: vite-plugin-robots-txt
- *  - Emits robots.txt in build
- *  - Serves robots.txt in dev with no-store
- *  - Optional mirror to disk via outputDir (both dev & prod)
- *  - Unified style, Vite logger, no external helpers
- * ---------------------------------------------------------------------------
+ * Vite plugin that generates a `robots.txt`:
+ * - **build**: emitted as a build asset (lands at the root of your build `outDir`);
+ * - **dev**: served from the `robots.txt` route with no-store headers;
+ * - **optional**: mirrored to `outputDir` on disk in both modes.
  */
-
-/** One user-agent block */
-export type RobotsPolicy = {
-    userAgent?: string;   // default "*"
-    allow?: string[];
-    disallow?: string[];
-};
-
-export type RobotsOptions = {
-    filename?: string; // default "robots.txt"
-
-    // Static policies (wins over builder if provided and non-empty)
-    policies?: RobotsPolicy[];
-
-    // Build from current ctx
-    policyBuilder?: (ctx: { mode: string; command: "serve" | "build"; root: string }) => RobotsPolicy[];
-
-    // Sitemaps
-    sitemaps?: string[] | ((ctx: { mode: string; command: "serve" | "build"; root: string }) => string[] | undefined);
-
-    // Footer as comment
-    footerComment?: string | ((ctx: { mode: string; command: "serve" | "build"; root: string }) => string | undefined);
-
-    // Control dev caching
-    noStoreInDev?: boolean; // default true
-
-    // Optional disk mirror (dev & prod)
-    outputDir?: string;
-};
-
-// ----------------- utils -----------------
-
-const DEFAULT_FILENAME = "robots.txt";
-
-function uniq<T>(arr?: T[]) {
-    return Array.from(new Set(arr ?? []));
-}
-
-function lines(...xs: Array<string | null | undefined | false>) {
-    return xs.filter(Boolean).map((x) => String(x));
-}
-
-function serializePolicies(policies: RobotsPolicy[]) {
-    const blocks: string[] = [];
-
-    for (const p of policies) {
-        const ua = (p.userAgent ?? "*").trim() || "*";
-        const dis = uniq(p.disallow).map((d) => `Disallow: ${d}`);
-        const allow = uniq(p.allow).map((a) => `Allow: ${a}`);
-        const block = lines(`User-agent: ${ua}`, ...dis, ...allow, "").join("\n");
-        blocks.push(block);
-    }
-
-    return blocks.join("\n").trimEnd() + "\n";
-}
-
-/** Default policy = allow all */
-function defaultPolicies(): RobotsPolicy[] {
-    return [{userAgent: "*", allow: ["/"], disallow: []}];
-}
-
-function buildContent(
-    ctx: { mode: string; command: "serve" | "build"; root: string },
-    opts: RobotsOptions
-) {
-    const policies =
-        (opts.policies && opts.policies.length ? opts.policies : undefined) ??
-        (opts.policyBuilder ? opts.policyBuilder(ctx) : undefined) ??
-        defaultPolicies();
-
-    const head = serializePolicies(policies);
-
-    const sitemaps =
-        typeof opts.sitemaps === "function"
-            ? opts.sitemaps(ctx)
-            : Array.isArray(opts.sitemaps)
-                ? opts.sitemaps
-                : undefined;
-    const smBlock = sitemaps?.length ? sitemaps.map((u) => `Sitemap: ${u}`).join("\n") + "\n" : "";
-
-    const foot = typeof opts.footerComment === "function" ? opts.footerComment(ctx) : opts.footerComment ?? undefined;
-    const footerBlock = foot ? `\n# ${foot.trim()}\n` : "";
-
-    return (head + (smBlock ? `\n${smBlock}` : "") + footerBlock).replace(/\n{3,}$/g, "\n\n");
-}
-
-async function writeFileIfChanged(filePath: string, content: string, logger: Logger) {
-    try {
-        const existed = fs.existsSync(filePath);
-        const prev = existed ? await fs.promises.readFile(filePath, "utf8") : null;
-        if (prev === content) {
-            logger.info?.(`[robots] no changes: ${filePath}`);
-            return false;
-        }
-    } catch {
-        // ignore
-    }
-    await fs.promises.mkdir(path.dirname(filePath), {recursive: true});
-    await fs.promises.writeFile(filePath, content, "utf8");
-    logger.info(`[robots] wrote ${filePath}`);
-    return true;
-}
-
-// ----------------- Vite plugin -----------------
-
 export function generateRobotsTxt(options: RobotsOptions = {}): Plugin {
-    const filename = options.filename ?? DEFAULT_FILENAME;
-    const noStoreInDev = options.noStoreInDev ?? true;
+  const filename = options.filename ?? DEFAULT_FILENAME;
+  const noStoreInDev = options.noStoreInDev ?? true;
 
-    let resolvedConfig!: ResolvedConfig;
-    let logger!: Logger;
-    let mode = "production";
-    let command: "serve" | "build" = "build";
-    let root = process.cwd();
+  let logger!: Logger;
+  let base = '/';
+  let ctx: RobotsContext = { mode: 'production', command: 'build', root: process.cwd() };
 
-    const buildTxt = () => {
-        const ctx = {mode, command, root};
-        return buildContent(ctx, options);
-    };
+  return {
+    name: PLUGIN_NAME,
 
-    return {
-        name: "vite-plugin-robots-txt",
-        apply: () => true,
+    configResolved(config) {
+      logger = config.logger;
+      base = config.base || '/';
+      ctx = {
+        mode: config.mode,
+        command: config.command,
+        root: config.root || process.cwd(),
+      };
+    },
 
-        configResolved(config) {
-            resolvedConfig = config;
-            logger = config.logger;
-            root = config.root ?? process.cwd();
-            mode = config.mode;
-            command = config.command as "serve" | "build";
-        },
+    async buildStart() {
+      if (!options.outputDir) return;
+      const outPath = path.resolve(ctx.root, options.outputDir, filename);
+      await writeFileIfChanged(outPath, render(ctx, options), logger, TAG);
+    },
 
-        async buildStart() {
-            const txt = buildTxt();
-            if (options.outputDir) {
-                const outPath = path.resolve(root, options.outputDir, filename);
-                await writeFileIfChanged(outPath, txt, logger);
-            }
-        },
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: filename, source: render(ctx, options) });
+      logger.info(`${TAG} emitted ${filename}`);
+    },
 
-        generateBundle() {
-            const txt = buildTxt();
-            this.emitFile({type: "asset", fileName: filename, source: txt});
-            logger.info(`[robots] emitted ${filename}`);
-        },
-
-        configureServer(server) {
-            const base = (resolvedConfig?.base ?? "/").replace(/\/+$/, "/");
-            const route = base + filename;
-
-            server.middlewares.use(route, (_req, res) => {
-                const txt = buildTxt();
-
-                res.setHeader("Content-Type", "text/plain; charset=utf-8");
-                if (noStoreInDev) {
-                    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-                    res.setHeader("Pragma", "no-cache");
-                    res.setHeader("Expires", "0");
-                }
-                res.end(txt);
-            });
-
-            logger.info(`[robots] dev route mounted → ${route} (no-store)`);
-        },
-    };
+    configureServer(server) {
+      const route = publicRoute(base, filename);
+      server.middlewares.use(route, (_req, res) => {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        if (noStoreInDev) setNoStore(res);
+        res.end(render(ctx, options));
+      });
+      logger.info(`${TAG} dev route mounted → ${route}${noStoreInDev ? ' (no-store)' : ''}`);
+    },
+  };
 }
 
 export default generateRobotsTxt;

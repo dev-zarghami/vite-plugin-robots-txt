@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-robots-txt",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Generate robots.txt for Vite with env-aware policies and dev no-store preview.",
   "keywords": [
     "vite",
@@ -49,6 +49,7 @@
   "scripts": {
     "build": "tsup",
     "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
     "prepare": "npm run build",
     "prepublishOnly": "npm run clean && npm run build"
   },
